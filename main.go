@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
 	"runtime"
@@ -40,6 +39,7 @@ type RunRunner struct {
 	Once       bool
 	Terminal   bool
 	Trace      bool
+	Remote     bool
 	WorkerArgs []string
 	JITConfig  string
 }
@@ -164,11 +164,21 @@ func (run *RunRunner) RunWithContext(listenerctx, ctx context.Context) int {
 		Version:  version,
 		Settings: settings,
 	}
-	err = runner.Run(&actionsdotnetactcompat.ActRunner{
-		WorkerRunnerEnvironment: actionsrunner.WorkerRunnerEnvironment{
-			WorkerArgs: run.WorkerArgs,
-		},
-	}, listenerctx, ctx)
+	var env actionsrunner.RunnerEnvironment
+	if run.Remote {
+		env, err = actionsrunner.NewRemoteEnv(ctx)
+		if err != nil {
+			fmt.Printf("Error: %v\n", err.Error())
+			return 1
+		}
+	} else {	
+		env = &actionsdotnetactcompat.ActRunner{
+			WorkerRunnerEnvironment: actionsrunner.WorkerRunnerEnvironment{
+				WorkerArgs: run.WorkerArgs,
+			},
+		}
+	}
+	err = runner.Run(env, listenerctx, ctx)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err.Error())
 		return 1
@@ -334,6 +344,7 @@ func main() {
 	cmdRun.Flags().StringSliceVar(&run.WorkerArgs, "worker-args", []string{}, "custom worker for your runner")
 	cmdRun.Flags().StringVarP(&run.JITConfig, "jitconfig", "", os.Getenv("ACTIONS_RUNNER_INPUT_JITCONFIG"),
 		"read the runner configuration from the jitconfig")
+	cmdRun.Flags().BoolVar(&run.Remote, "remote", false, "run the runner on RBE")
 	var jitConfig string
 	local, _ := common.LookupEnvBool("ACTIONS_RUNNER_INPUT_LOCAL")
 	cmdRemove := &cobra.Command{
@@ -404,18 +415,18 @@ func main() {
 				defer cancelExec()
 				buf := make([]byte, bufferSize)
 				for {
-					_, err := io.ReadFull(os.Stdin, buf) // Ignore read errors for worker protocol
+					_, err := os.Stdin.Read(buf) // Ignore read errors for worker protocol
 					if err != nil {
 						fmt.Printf("io.ReadFull message type: %v", err)
 					}
 					messageType := binary.BigEndian.Uint32(buf)
-					_, err = io.ReadFull(os.Stdin, buf) // Ignore read errors for worker protocol
+					_, err = os.Stdin.Read(buf) // Ignore read errors for worker protocol
 					if err != nil {
 						fmt.Printf("io.ReadFull message length: %v", err)
 					}
 					messageLength := binary.BigEndian.Uint32(buf)
 					src := make([]byte, messageLength)
-					_, err = io.ReadFull(os.Stdin, src) // Ignore read errors for worker protocol
+					_, err = os.Stdin.Read(src) // Ignore read errors for worker protocol
 					if err != nil {
 						fmt.Printf("io.ReadFull stdin: %v", err)
 					}
